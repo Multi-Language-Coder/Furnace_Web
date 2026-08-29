@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Furnace Web Player</title>
+<style>
+  :root {
+    --bg: #1b1a26;
+    --panel: #262436;
+    --accent: #ffa53d;
+    --accent-dim: #7a5a2e;
+    --text: #e8e6f0;
+    --muted: #9a97ad;
+    --ok: #6fd08c;
+    --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .app {
+    width: 100%;
+    max-width: 560px;
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 28px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.4);
+  }
+  h1 {
+    margin: 0 0 4px;
+    font-size: 22px;
+    letter-spacing: .5px;
+  }
+  h1 .flame { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+
+  .drop {
+    border: 2px dashed var(--accent-dim);
+    border-radius: 10px;
+    padding: 26px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: rgba(255,165,61,.06); }
+  .drop b { color: var(--text); }
+  input[type=file] { display: none; }
+
+  .song {
+    margin: 20px 0 8px;
+    min-height: 46px;
+  }
+  .song .title { font-size: 18px; font-weight: 600; }
+  .song .author { color: var(--muted); font-size: 13px; }
+
+  .viz {
+    display: block;
+    width: 100%;
+    height: 150px;
+    margin: 6px 0 2px;
+    background: #14131d;
+    border: 1px solid #322f45;
+    border-radius: 8px;
+  }
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 14px;
+  }
+  button {
+    background: var(--accent);
+    color: #241a0d;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { background: #454154; color: var(--muted); cursor: not-allowed; }
+  button.secondary { background: #3a3750; color: var(--text); }
+
+  .pos {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, "Cascadia Code", monospace;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .pos b { color: var(--text); }
+
+  .status {
+    margin-top: 18px;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 18px;
+  }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--err); }
+  code { background: #00000030; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="app">
+    <h1><span class="flame">&#9832;</span> Furnace Web Player</h1>
+    <div class="sub">Plays <code>.fur</code> / <code>.dmf</code> modules in your browser &mdash; the Furnace engine compiled to WebAssembly.</div>
+
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".fur,.dmf,.0cc,.ftm,.mod,.fc,.fc13,.fc14,.tfe">
+      Drop a module here or <b>click to choose a file</b>
+    </label>
+
+    <div class="song">
+      <div class="title" id="title">&mdash;</div>
+      <div class="author" id="author"></div>
+    </div>
+
+    <canvas id="viz" class="viz"></canvas>
+
+    <div class="controls">
+      <button id="play" disabled>&#9654; Play</button>
+      <button id="stop" class="secondary" disabled>&#9632; Stop</button>
+      <div class="pos">order <b id="order">00</b> &middot; row <b id="row">00</b></div>
+    </div>
+
+    <div class="status" id="status">Loading engine&hellip;</div>
+  </div>
+
+  <script type="module" src="./player.js"></script>
+</body>
+</html>

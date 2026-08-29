@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Furnace Web Player</title>
+<style>
+  :root {
+    --bg: #1b1a26;
+    --panel: #262436;
+    --accent: #ffa53d;
+    --accent-dim: #7a5a2e;
+    --text: #e8e6f0;
+    --muted: #9a97ad;
+    --ok: #6fd08c;
+    --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .app {
+    width: 100%;
+    max-width: 560px;
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 28px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.4);
+  }
+  h1 {
+    margin: 0 0 4px;
+    font-size: 22px;
+    letter-spacing: .5px;
+  }
+  h1 .flame { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+  .sub a { color: var(--accent); text-decoration: none; }
+
+  .drop {
+    border: 2px dashed var(--accent-dim);
+    border-radius: 10px;
+    padding: 26px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: rgba(255,165,61,.06); }
+  .drop b { color: var(--text); }
+  input[type=file] { display: none; }
+
+  .song {
+    margin: 20px 0 8px;
+    min-height: 46px;
+  }
+  .song .title { font-size: 18px; font-weight: 600; }
+  .song .author { color: var(--muted); font-size: 13px; }
+
+  .viz {
+    display: block;
+    width: 100%;
+    height: 150px;
+    margin: 6px 0 2px;
+    background: #14131d;
+    border: 1px solid #322f45;
+    border-radius: 8px;
+  }
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 14px;
+  }
+  button {
+    background: var(--accent);
+    color: #241a0d;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { background: #454154; color: var(--muted); cursor: not-allowed; }
+  button.secondary { background: #3a3750; color: var(--text); }
+
+  .pos {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, "Cascadia Code", monospace;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .pos b { color: var(--text); }
+
+  .status {
+    margin-top: 18px;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 18px;
+  }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--err); }
+  code { background: #00000030; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="app">
+    <h1><span class="flame">&#9832;</span> Furnace Web Player</h1>
+    <div class="sub">Plays <code>.fur</code> / <code>.dmf</code> modules in your browser &mdash; the Furnace engine compiled to WebAssembly, streamed from <a href="https://www.jsdelivr.com/" target="_blank" rel="noopener">jsDelivr</a>. Fully standalone: this one file needs no local server.</div>
+
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".fur,.dmf,.0cc,.ftm,.mod,.fc,.fc13,.fc14,.tfe">
+      Drop a module here or <b>click to choose a file</b>
+    </label>
+
+    <div class="song">
+      <div class="title" id="title">&mdash;</div>
+      <div class="author" id="author"></div>
+    </div>
+
+    <canvas id="viz" class="viz"></canvas>
+
+    <div class="controls">
+      <button id="play" disabled>&#9654; Play</button>
+      <button id="stop" class="secondary" disabled>&#9632; Stop</button>
+      <div class="pos">order <b id="order">00</b> &middot; row <b id="row">00</b></div>
+    </div>
+
+    <div class="status" id="status">Loading engine&hellip;</div>
+  </div>
+
+<script type="module">
+// Furnace Web Player — standalone build.
+//
+// Identical front-end to web/player.js, except the Emscripten module and its
+// .wasm are streamed from the jsDelivr GitHub CDN instead of sitting next to
+// this file. That makes this HTML fully portable: open it from anywhere (even
+// file://) and it pulls furnace-web.js / furnace-web.wasm from the CDN.
+//
+// CDN points at the repo's default branch. Branch URLs are cached by jsDelivr
+// for ~12h; for an immutable, long-cached URL, cut a git tag/release and change
+// @main to @<tag> below.
+const CDN = 'https://cdn.jsdelivr.net/gh/Multi-Language-Coder/Furnace_Web@main/dist/';
+
+const els = {
+  drop: document.getElementById('drop'),
+  file: document.getElementById('file'),
+  title: document.getElementById('title'),
+  author: document.getElementById('author'),
+  play: document.getElementById('play'),
+  stop: document.getElementById('stop'),
+  order: document.getElementById('order'),
+  row: document.getElementById('row'),
+  status: document.getElementById('status'),
+};
+
+function setStatus(msg, kind) {
+  els.status.textContent = msg;
+  els.status.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+// ---- engine handle ----
+let Mod = null;        // Emscripten module instance
+let wp = {};           // cwrapped functions
+let ctx = null;        // AudioContext
+let inited = false;    // wp_init called
+let loaded = false;    // a module is loaded
+
+// scheduler state
+const BLOCK = 1024;             // frames rendered per call (~21ms @48k: viz sync granularity)
+const LOOKAHEAD = 0.2;           // seconds of audio to keep queued ahead
+let leftPtr = 0, rightPtr = 0;   // WASM heap scratch buffers
+let nextTime = 0;                // AudioContext time of next queued block
+let schedTimer = null;
+let playing = false;
+
+// ---- visualizer state (SPC700-style per-channel mixer + scope) ----
+const SCOPE_N = 96;             // samples per channel scope
+const VU_RELEASE = 0.86;        // per-frame VU release (fast attack, slow fall)
+let viz = {
+  canvas: document.getElementById('viz'),
+  cctx: null,
+  chans: 0,
+  names: [],
+  levelsPtr: 0,
+  scopePtr: 0,
+  raf: 0,
+  queue: [],
+  disp: null,
+  lastSnap: null,
+};
+
+function setupViz() {
+  if (!viz.canvas) return;
+  viz.cctx = viz.canvas.getContext('2d');
+  viz.chans = wp.chanCount();
+  viz.names = [];
+  for (let i = 0; i < viz.chans; i++) viz.names.push(wp.chanName(i) || String(i + 1));
+  if (viz.levelsPtr) Mod._free(viz.levelsPtr);
+  if (viz.scopePtr) Mod._free(viz.scopePtr);
+  viz.levelsPtr = Mod._malloc(Math.max(1, viz.chans) * 4);
+  viz.scopePtr = Mod._malloc(SCOPE_N * 4);
+  viz.queue = [];
+  viz.lastSnap = null;
+  viz.disp = new Float32Array(viz.chans);
+  resizeViz();
+  if (!viz.raf) viz.raf = requestAnimationFrame(drawViz);
+}
+
+function captureViz(t) {
+  if (!viz.chans) return;
+  const nch = viz.chans;
+  wp.chanLevels(viz.levelsPtr, nch);
+  const levels = new Float32Array(Mod.HEAPF32.subarray(viz.levelsPtr >> 2, (viz.levelsPtr >> 2) + nch));
+  const scopes = new Float32Array(nch * SCOPE_N);
+  for (let i = 0; i < nch; i++) {
+    wp.chanScope(i, viz.scopePtr, SCOPE_N);
+    scopes.set(Mod.HEAPF32.subarray(viz.scopePtr >> 2, (viz.scopePtr >> 2) + SCOPE_N), i * SCOPE_N);
+  }
+  viz.queue.push({ t, levels, scopes });
+  if (viz.queue.length > 256) viz.queue.shift();
+}
+
+function resizeViz() {
+  if (!viz.canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = viz.canvas.clientWidth, h = viz.canvas.clientHeight;
+  viz.canvas.width = Math.max(1, Math.round(w * dpr));
+  viz.canvas.height = Math.max(1, Math.round(h * dpr));
+}
+
+function levelColor(v) {
+  if (v < 0.5) return `rgb(${Math.round(90 + v * 2 * 130)},${Math.round(200 + v * 2 * 20)},120)`;
+  const t = (v - 0.5) * 2;
+  return `rgb(255,${Math.round(190 - t * 150)},${Math.round(70 - t * 60)})`;
+}
+
+function drawViz() {
+  viz.raf = requestAnimationFrame(drawViz);
+  const c = viz.cctx;
+  if (!c || !viz.chans) return;
+  const W = viz.canvas.width, H = viz.canvas.height;
+  const dpr = window.devicePixelRatio || 1;
+
+  c.clearRect(0, 0, W, H);
+
+  if (ctx) {
+    const now = ctx.currentTime;
+    while (viz.queue.length && viz.queue[0].t <= now) viz.lastSnap = viz.queue.shift();
+  }
+  const snap = viz.lastSnap;
+  const raw = snap ? snap.levels : null;
+  const scopeData = snap ? snap.scopes : null;
+
+  const lv = viz.disp;
+  for (let i = 0; i < viz.chans; i++) {
+    const target = raw ? raw[i] : 0;
+    lv[i] = target > lv[i] ? target : lv[i] * VU_RELEASE;
+    if (lv[i] < 0.00001) lv[i] = 0;
+  }
+
+  const colW = W / viz.chans;
+  const pad = Math.max(1, colW * 0.12);
+  const scopeH = H * 0.5;
+  const barTop = H * 0.56;
+  const barBot = H - 15 * dpr;
+  const barMaxH = barBot - barTop;
+
+  c.textAlign = 'center';
+  c.textBaseline = 'bottom';
+  c.font = `${Math.round(9 * dpr)}px ui-monospace, monospace`;
+
+  for (let i = 0; i < viz.chans; i++) {
+    const x = i * colW;
+    const cx = x + colW / 2;
+    const v = lv[i] || 0;
+
+    c.strokeStyle = v > 0.001 ? levelColor(v) : 'rgba(154,151,173,0.35)';
+    c.lineWidth = Math.max(1, 1.2 * dpr);
+    c.beginPath();
+    const sMid = scopeH * 0.5;
+    const sAmp = scopeH * 0.44;
+    const base = i * SCOPE_N;
+    for (let s = 0; s < SCOPE_N; s++) {
+      const sx = x + pad + (colW - 2 * pad) * (s / (SCOPE_N - 1));
+      const sy = sMid - (scopeData ? scopeData[base + s] : 0) * sAmp;
+      if (s === 0) c.moveTo(sx, sy); else c.lineTo(sx, sy);
+    }
+    c.stroke();
+
+    c.fillStyle = 'rgba(255,255,255,0.05)';
+    c.fillRect(x + pad, barTop, colW - 2 * pad, barMaxH);
+    const bh = barMaxH * v;
+    c.fillStyle = levelColor(v);
+    c.fillRect(x + pad, barBot - bh, colW - 2 * pad, bh);
+
+    c.fillStyle = 'rgba(232,230,240,0.75)';
+    c.fillText(viz.names[i], cx, H - 3 * dpr);
+  }
+}
+
+window.addEventListener('resize', resizeViz);
+
+async function boot() {
+  // dynamic import so the CDN base lives in one place (static `import` needs a
+  // string literal); default export is the Emscripten module factory.
+  const { default: FurnaceModule } = await import(CDN + 'furnace-web.js');
+  // locateFile makes the runtime fetch furnace-web.wasm from the CDN too.
+  Mod = await FurnaceModule({ locateFile: (path) => CDN + path });
+  wp = {
+    init:       Mod.cwrap('wp_init', 'number', ['number']),
+    load:       Mod.cwrap('wp_load', 'number', ['number', 'number']),
+    play:       Mod.cwrap('wp_play', null, []),
+    stop:       Mod.cwrap('wp_stop', null, []),
+    render:     Mod.cwrap('wp_render', 'number', ['number', 'number', 'number']),
+    isPlaying:  Mod.cwrap('wp_isPlaying', 'number', []),
+    getOrder:   Mod.cwrap('wp_getOrder', 'number', []),
+    getRow:     Mod.cwrap('wp_getRow', 'number', []),
+    songName:   Mod.cwrap('wp_getSongName', 'string', []),
+    songAuthor: Mod.cwrap('wp_getSongAuthor', 'string', []),
+    lastError:  Mod.cwrap('wp_getLastError', 'string', []),
+    chanCount:  Mod.cwrap('wp_getChannelCount', 'number', []),
+    chanName:   Mod.cwrap('wp_getChannelName', 'string', ['number']),
+    chanLevels: Mod.cwrap('wp_getChannelLevels', 'number', ['number', 'number']),
+    chanScope:  Mod.cwrap('wp_getChannelScope', 'number', ['number', 'number', 'number']),
+  };
+  setStatus('Engine ready. Load a module to begin.', 'ok');
+}
+
+function ensureAudio() {
+  if (ctx) return true;
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const ok = wp.init(ctx.sampleRate);
+  if (!ok) {
+    setStatus('Engine init failed: ' + wp.lastError(), 'err');
+    return false;
+  }
+  inited = true;
+  leftPtr = Mod._malloc(BLOCK * 4);
+  rightPtr = Mod._malloc(BLOCK * 4);
+  return true;
+}
+
+async function loadFile(file) {
+  if (!Mod) { setStatus('Engine still loading…'); return; }
+  if (!ensureAudio()) return;
+  stopPlayback();
+
+  setStatus('Loading ' + file.name + '…');
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const ptr = Mod._malloc(buf.length);
+  Mod.HEAPU8.set(buf, ptr);
+  const ok = wp.load(ptr, buf.length);
+  Mod._free(ptr);
+
+  if (!ok) {
+    loaded = false;
+    els.title.textContent = '—';
+    els.author.textContent = '';
+    els.play.disabled = true;
+    setStatus('Could not load module: ' + wp.lastError(), 'err');
+    return;
+  }
+
+  loaded = true;
+  const name = wp.songName() || file.name;
+  els.title.textContent = name;
+  els.author.textContent = wp.songAuthor() || '';
+  els.play.disabled = false;
+  setupViz();
+  setStatus('Loaded. Press Play.', 'ok');
+}
+
+function renderBlockTo(audioBuffer) {
+  const n = wp.render(leftPtr, rightPtr, BLOCK);
+  const L = audioBuffer.getChannelData(0);
+  const R = audioBuffer.getChannelData(1);
+  L.set(Mod.HEAPF32.subarray(leftPtr >> 2, (leftPtr >> 2) + n));
+  R.set(Mod.HEAPF32.subarray(rightPtr >> 2, (rightPtr >> 2) + n));
+  return n;
+}
+
+function schedule() {
+  while (nextTime < ctx.currentTime + LOOKAHEAD) {
+    const ab = ctx.createBuffer(2, BLOCK, ctx.sampleRate);
+    renderBlockTo(ab);
+    captureViz(nextTime);
+    const src = ctx.createBufferSource();
+    src.buffer = ab;
+    src.connect(ctx.destination);
+    src.start(nextTime);
+    nextTime += BLOCK / ctx.sampleRate;
+  }
+  els.order.textContent = String(wp.getOrder()).padStart(2, '0');
+  els.row.textContent = String(wp.getRow()).padStart(2, '0');
+}
+
+function startPlayback() {
+  if (!loaded || playing) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  wp.play();
+  playing = true;
+  viz.queue = [];
+  viz.lastSnap = null;
+  nextTime = ctx.currentTime + 0.05;
+  schedTimer = setInterval(schedule, 50);
+  els.play.disabled = true;
+  els.stop.disabled = false;
+  setStatus('Playing.', 'ok');
+}
+
+function stopPlayback() {
+  if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
+  if (inited) wp.stop();
+  playing = false;
+  viz.queue = [];
+  viz.lastSnap = null;
+  els.play.disabled = !loaded;
+  els.stop.disabled = true;
+}
+
+els.file.addEventListener('change', (e) => {
+  if (e.target.files.length) loadFile(e.target.files[0]);
+});
+els.drop.addEventListener('dragover', (e) => { e.preventDefault(); els.drop.classList.add('over'); });
+els.drop.addEventListener('dragleave', () => els.drop.classList.remove('over'));
+els.drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  els.drop.classList.remove('over');
+  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+});
+els.play.addEventListener('click', startPlayback);
+els.stop.addEventListener('click', () => { stopPlayback(); setStatus('Stopped.'); });
+
+setStatus('Fetching engine from CDN…');
+boot().catch((err) => setStatus('Failed to load engine: ' + err, 'err'));
+</script>
+</body>
+</html>

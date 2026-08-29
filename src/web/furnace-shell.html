@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Furnace</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #0f0e17; color: #e8e6f0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  #canvas {
+    display: block; width: 100vw; height: 100vh;
+    border: 0; outline: none; background: #0f0e17;
+  }
+  /* loading overlay, hidden once the runtime is up */
+  #loader {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px;
+    background: #0f0e17; z-index: 10; transition: opacity .4s; text-align: center;
+  }
+  #loader.hidden { opacity: 0; pointer-events: none; }
+  #loader .flame { font-size: 40px; }
+  #loader h1 { margin: 0; font-size: 22px; letter-spacing: .5px; }
+  #loader h1 b { color: #ffa53d; }
+  #bar { width: 260px; height: 6px; border-radius: 3px; background: #2a2838; overflow: hidden; }
+  #bar > div { height: 100%; width: 0; background: #ffa53d; transition: width .2s; }
+  #hint { color: #9a97ad; font-size: 13px; max-width: 340px; }
+</style>
+</head>
+<body>
+  <div id="loader">
+    <div class="flame">&#9832;</div>
+    <h1><b>Furnace</b> &mdash; chiptune tracker</h1>
+    <div id="bar"><div></div></div>
+    <div id="hint">loading&hellip; (first load fetches ~15&nbsp;MB)</div>
+  </div>
+
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+
+  <script type="text/javascript">
+    var statusEl = document.getElementById('hint');
+    var barEl = document.querySelector('#bar > div');
+    var loaderEl = document.getElementById('loader');
+    var canvasEl = document.getElementById('canvas');
+
+    // size the canvas backing store to the viewport (Furnace/SDL reads this at
+    // startup and on resize) so the UI fills the window instead of a tiny box.
+    function sizeCanvas() {
+      var dpr = 1; // keep 1:1 for crisp ImGui text; DPR scaling can be added later
+      canvasEl.width = Math.floor(window.innerWidth * dpr);
+      canvasEl.height = Math.floor(window.innerHeight * dpr);
+    }
+    sizeCanvas();
+
+    var Module = {
+      canvas: canvasEl,
+      arguments: [],
+      preRun: [function () {
+        // Mount the Furnace config directory (/home/web_user/.config, which holds
+        // furnace.cfg, layout.ini, recent files, the welcome-shown flag) on an
+        // IndexedDB-backed filesystem, and load it BEFORE main() runs so settings
+        // persist across reloads. addRunDependency gates startup until the async
+        // load completes.
+        try { FS.mkdir('/home/web_user/.config'); } catch (e) {}
+        try {
+          FS.mount(IDBFS, {}, '/home/web_user/.config');
+          addRunDependency('furnace-idbfs');
+          FS.syncfs(true, function (err) {
+            if (err) console.error('IDBFS initial load error:', err);
+            removeRunDependency('furnace-idbfs');
+          });
+        } catch (e) { console.error('IDBFS mount failed:', e); }
+      }],
+      postRun: [],
+      print: function (t) { console.log(t); },
+      printErr: function (t) { console.error(t); },
+      setStatus: function (text) {
+        if (statusEl) statusEl.textContent = text || '';
+        var m = text && text.match(/([0-9.]+)\s*\/\s*([0-9.]+)/);
+        if (m && barEl) barEl.style.width = (100 * parseFloat(m[1]) / parseFloat(m[2])) + '%';
+      },
+      onRuntimeInitialized: function () {
+        if (barEl) barEl.style.width = '100%';
+        // give the first frames a moment, then reveal the UI
+        setTimeout(function () { loaderEl.classList.add('hidden'); }, 600);
+      },
+      totalDependencies: 0,
+    };
+    window.Module = Module;
+
+    // Furnace controls the SDL window size itself; on browser resize we just
+    // keep the canvas backing store matched to the viewport.
+    window.addEventListener('resize', function () {
+      try { sizeCanvas(); } catch (e) {}
+    });
+    // focus the canvas so keyboard input reaches the tracker
+    window.addEventListener('load', function () { canvasEl.focus(); });
+    canvasEl.addEventListener('click', function () { canvasEl.focus(); });
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

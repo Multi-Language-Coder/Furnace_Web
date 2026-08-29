@@ -1,0 +1,831 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b980ae253..58de9ade1 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -108,6 +108,46 @@ else()
+   set(USE_MOMO_DEFAULT ON)
+ endif()
+ 
++# ---- Emscripten / Web Player build ----
++# When targeting Emscripten we build only the playback engine (no ImGui GUI)
++# plus a thin C wrapper (src/web/webPlayer.cpp) that the browser drives through
++# Web Audio. Force every desktop/GUI-only dependency off so the WASM link stays
++# small and buildable.
++set(WITH_JSON_DEFAULT ON)
++set(WEBPLAYER_DEFAULT OFF)
++# WEBGUI builds the FULL tracker UI for the browser; WEBPLAYER (the default under
++# Emscripten) builds only the headless engine + a Web Audio player wrapper.
++option(WEBGUI "Build the full Furnace tracker UI for Emscripten/WebAssembly." OFF)
++if (EMSCRIPTEN)
++  if (WEBGUI)
++    # full tracker: keep the GUI, render through SDL_Renderer (SDL2 creates the
++    # WebGL context for us), and drop the desktop-only render backends.
++    set(BUILD_GUI_DEFAULT ON)
++    set(WITH_RENDER_SDL_DEFAULT ON)
++    set(WITH_RENDER_OPENGL_DEFAULT OFF)
++    set(WITH_RENDER_OPENGL1_DEFAULT OFF)
++    set(USE_FREETYPE_DEFAULT OFF)
++    set(WITH_JSON_DEFAULT ON)
++  else()
++    set(WEBPLAYER_DEFAULT ON)
++    set(WITH_JSON_DEFAULT OFF)
++    set(BUILD_GUI_DEFAULT OFF)
++  endif()
++  # disables common to both Emscripten builds
++  set(USE_RTMIDI_DEFAULT OFF)
++  set(WITH_PORTAUDIO_DEFAULT OFF)
++  set(WITH_JACK_DEFAULT OFF)
++  set(WITH_ASIO_DEFAULT OFF)
++  set(USE_BACKWARD_DEFAULT OFF)
++  # keep libsndfile on: DivFilePlayer references SFWrapper unconditionally, and
++  # WAV-only libsndfile (ogg/vorbis/mpeg disabled below) builds fine under wasm.
++  set(WITH_OGG_DEFAULT OFF)
++  set(WITH_MPEG_DEFAULT OFF)
++  set(WITH_LOCALE_DEFAULT OFF)
++  set(USE_MOMO_DEFAULT OFF)
++endif()
++option(WEBPLAYER "Build the Emscripten/WebAssembly web player instead of the desktop app." ${WEBPLAYER_DEFAULT})
++
+ option(BUILD_GUI "Build the tracker (disable to build only a headless player)" ${BUILD_GUI_DEFAULT})
+ option(WITH_LOCALE "Use libintl for language support" ${WITH_LOCALE_DEFAULT})
+ option(USE_RTMIDI "Build with MIDI support using RtMidi." ${USE_RTMIDI_DEFAULT})
+@@ -126,9 +166,12 @@ option(WITH_RENDER_OPENGL1 "Whether to build with the OpenGL 1.1 render backend.
+ option(WITH_RENDER_DX11 "Whether to build with the DirectX 11 render backend." ${WITH_RENDER_DX11_DEFAULT})
+ option(WITH_RENDER_DX9 "Whether to build with the DirectX 9 render backend." ${WITH_RENDER_DX9_DEFAULT})
+ option(WITH_RENDER_METAL "Whether to build with the Metal render backend." ${WITH_RENDER_METAL_DEFAULT})
+-option(WITH_JSON "Whether to build with JSON export support." ON)
++option(WITH_JSON "Whether to build with JSON export support." ${WITH_JSON_DEFAULT})
+ option(USE_GLES "Use OpenGL ES for the OpenGL render backend." ${USE_GLES_DEFAULT})
+-option(USE_FREETYPE "Use FreeType for font rendering." ON)
++if (NOT DEFINED USE_FREETYPE_DEFAULT)
++  set(USE_FREETYPE_DEFAULT ON)
++endif()
++option(USE_FREETYPE "Use FreeType for font rendering." ${USE_FREETYPE_DEFAULT})
+ option(SYSTEM_FFTW "Use a system-installed version of FFTW instead of the vendored one" OFF)
+ option(SYSTEM_FMT "Use a system-installed version of fmt instead of the vendored one" OFF)
+ option(SYSTEM_FREETYPE "Use a system-installed version of FreeType instead of the vendored one" OFF)
+@@ -208,7 +251,10 @@ if (WIN32)
+   endif()
+ endif()
+ 
+-if (SYSTEM_FFTW)
++# FFTW is only used by the GUI (channel oscilloscope); the web player has no GUI.
++if (WEBPLAYER)
++  message(STATUS "Web player: skipping FFTW (GUI-only)")
++elseif (SYSTEM_FFTW)
+   find_package(PkgConfig REQUIRED)
+   pkg_check_modules(FFTW REQUIRED fftw3>=3.3)
+   list(APPEND DEPENDENCIES_INCLUDE_DIRS ${FFTW_INCLUDE_DIRS})
+@@ -417,7 +463,12 @@ else()
+ endif()
+ 
+ if (USE_SDL2)
+-  if (SYSTEM_SDL2)
++  if (EMSCRIPTEN)
++    # Emscripten ships its own SDL2 port; don't build the vendored native SDL.
++    list(APPEND DEPENDENCIES_DEFINES HAVE_SDL2)
++    list(APPEND DEPENDENCIES_COMPILE_OPTIONS "-sUSE_SDL=2")
++    message(STATUS "Using Emscripten SDL2 port")
++  elseif (SYSTEM_SDL2)
+     if (PKG_CONFIG_FOUND)
+       pkg_check_modules(SDL2 sdl2>=${SYSTEM_SDL_MIN_VER})
+       if (SDL2_FOUND)
+@@ -1255,7 +1306,12 @@ if (WITH_LOCALE)
+   endif()
+ endif()
+ 
+-set(USED_SOURCES ${ENGINE_SOURCES} ${AUDIO_SOURCES} ${CLI_SOURCES} src/main.cpp)
++if (WEBPLAYER)
++  # No CLI, no main.cpp: webPlayer.cpp is the WASM entry surface.
++  set(USED_SOURCES ${ENGINE_SOURCES} ${AUDIO_SOURCES} src/web/webPlayer.cpp)
++else()
++  set(USED_SOURCES ${ENGINE_SOURCES} ${AUDIO_SOURCES} ${CLI_SOURCES} src/main.cpp)
++endif()
+ 
+ if (USE_BACKWARD)
+   list(APPEND USED_SOURCES src/backtrace.cpp)
+@@ -1339,7 +1395,7 @@ if (WARNINGS_ARE_ERRORS)
+   )
+ endif()
+ 
+-if (NOT ANDROID OR TERMUX)
++if ((NOT ANDROID OR TERMUX) AND NOT WEBPLAYER)
+   if (NOT WIN32 AND NOT APPLE)
+     if (NOT DONT_HAVE_GIT)
+       add_custom_command(OUTPUT furnace.appdata.xml COMMAND res/make-appdata.sh ARGS ${CMAKE_SOURCE_DIR}/res/furnace.appdata.xml.in ${CMAKE_BINARY_DIR}/furnace.appdata.xml DEPENDS res/furnace.appdata.xml.in WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+@@ -1388,6 +1444,73 @@ if (PKG_CONFIG_FOUND AND (SYSTEM_FMT OR SYSTEM_LIBSNDFILE OR SYSTEM_ZLIB OR SYST
+   endif()
+ endif()
+ 
++if (WEBPLAYER)
++  # Emit an ES6 module (furnace-web.js + furnace-web.wasm) that JS imports and
++  # drives via ccall/cwrap. Single-threaded: no -pthread, so no SharedArrayBuffer
++  # and no COOP/COEP headers are required to serve it.
++  set_target_properties(${FURNACE} PROPERTIES OUTPUT_NAME "furnace-web")
++  # The engine's file loader (DivEngine::load) uses C++ exceptions for control
++  # flow (NotZlibException); Emscripten disables exception catching by default,
++  # which turns those throws into aborts. Re-enable catching for the engine.
++  #
++  # -fno-strict-aliasing: the binary module parsers (loadFur etc.) reinterpret
++  # raw byte buffers through typed pointers. clang at -O3 (Emscripten's default)
++  # exploits strict aliasing and miscompiles those reads, so module loads fail
++  # (works at -O0 / under ASAN, fails at -O3). Disabling strict aliasing keeps
++  # -O3 performance while making the parsers correct.
++  target_compile_options(${FURNACE} PRIVATE "-fexceptions" "-fno-strict-aliasing")
++  target_link_options(${FURNACE} PRIVATE
++    "-fexceptions"
++    "-sUSE_SDL=2"
++    "-sMODULARIZE=1"
++    "-sEXPORT_ES6=1"
++    "-sEXPORT_NAME=FurnaceModule"
++    "-sENVIRONMENT=web,worker,node"
++    "-sALLOW_MEMORY_GROWTH=1"
++    "-sINITIAL_MEMORY=134217728"
++    # Emscripten's default stack is only 64 KB. The module loader (loadFur)
++    # places a large DivSong on the stack and recurses deep, overflowing it and
++    # silently corrupting memory (loads fail with garbage errors). Give it room.
++    "-sSTACK_SIZE=8388608"
++    "-sEXIT_RUNTIME=0"
++    "-sFORCE_FILESYSTEM=1"
++    # Keep the wasm a SEPARATE binary (not SINGLE_FILE): a big base64 .js ES
++    # module import gets reset by aggressive local HTTP scanners, whereas a plain
++    # .wasm binary fetch is retried/awaited by the browser (the full 15 MB GUI
++    # build loads this way). Small .js + separate .wasm is the robust path.
++    "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,HEAPU8,HEAPF32,UTF8ToString"
++    "-sEXPORTED_FUNCTIONS=_wp_init,_wp_load,_wp_play,_wp_stop,_wp_render,_wp_isPlaying,_wp_getOrder,_wp_getRow,_wp_getSongName,_wp_getSongAuthor,_wp_getLastError,_wp_getChannelCount,_wp_getChannelName,_wp_getChannelLevels,_wp_getChannelScope,_malloc,_free,_main"
++  )
++elseif (WEBGUI)
++  # Full tracker UI. Emscripten emits furnace.html (a shell with a <canvas>) plus
++  # furnace.js/.wasm. SDL2 (via -sUSE_SDL=2) creates the WebGL context and the
++  # SDL_Renderer/ImGui backend draws into it; the browser event loop drives
++  # FurnaceGUI::loopFrame() (see emscripten_set_main_loop in gui.cpp).
++  set_target_properties(${FURNACE} PROPERTIES OUTPUT_NAME "furnace" SUFFIX ".html")
++  # same loadFur concerns as the player (exceptions for NotZlibException control
++  # flow; no strict aliasing in the byte-buffer parsers).
++  target_compile_options(${FURNACE} PRIVATE "-fexceptions" "-fno-strict-aliasing")
++  target_link_options(${FURNACE} PRIVATE
++    "-fexceptions"
++    "-sUSE_SDL=2"
++    "-sMAX_WEBGL_VERSION=2"
++    # custom full-viewport shell (replaces the default emscripten canvas page)
++    "--shell-file" "${CMAKE_SOURCE_DIR}/web/furnace-shell.html"
++    "-sALLOW_MEMORY_GROWTH=1"
++    "-sINITIAL_MEMORY=268435456"
++    "-sSTACK_SIZE=8388608"
++    "-sEXIT_RUNTIME=0"
++    "-sFORCE_FILESYSTEM=1"
++    # persist config/songs across reloads via an IndexedDB-backed FS
++    "-lidbfs.js"
++    # the file-dialog shim (fileDialogWeb) drives HTML <input>/download from JS
++    "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,IDBFS,UTF8ToString,stringToNewUTF8,callMain"
++    # give the browser room; some songs are large. allow undefined at link only
++    # while we stub out the last desktop-only bits.
++    "-sERROR_ON_UNDEFINED_SYMBOLS=1"
++  )
++endif()
++
+ # why 3.16..... why not 3.0?
+ if (NOT "${CMAKE_VERSION}" VERSION_LESS "3.16")
+   if (BUILD_GUI)
+@@ -1403,7 +1526,7 @@ if (NOT "${CMAKE_VERSION}" VERSION_LESS "3.16")
+   endif()
+ endif()
+ 
+-if (NOT ANDROID OR TERMUX)
++if ((NOT ANDROID OR TERMUX) AND NOT WEBPLAYER)
+   if (NOT WIN32 AND NOT APPLE)
+     include(GNUInstallDirs)
+     install(TARGETS ${FURNACE} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+diff --git a/src/engine/configEngine.cpp b/src/engine/configEngine.cpp
+index 6a02d7b35..27af1daf5 100644
+--- a/src/engine/configEngine.cpp
++++ b/src/engine/configEngine.cpp
+@@ -21,6 +21,10 @@
+ #include "../ta-log.h"
+ #include "../fileutils.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
++
+ #ifdef _WIN32
+ #include "winStuff.h"
+ #define CONFIG_FILE "\\furnace.cfg"
+@@ -117,7 +121,13 @@ void DivEngine::initConfDir() {
+ 
+ bool DivEngine::saveConf() {
+   configFile=configPath+String(CONFIG_FILE);
+-  return conf.save(configFile.c_str(),true);
++  bool ret=conf.save(configFile.c_str(),true);
++#ifdef __EMSCRIPTEN__
++  // the config dir is an IDBFS mount; flush it back to IndexedDB so settings,
++  // recent files and the "welcome shown" flag survive a page reload.
++  EM_ASM({ if (typeof FS!=='undefined') { FS.syncfs(false, function(e){}); } });
++#endif
++  return ret;
+ }
+ 
+ bool DivEngine::loadConf() {
+diff --git a/src/gui/fileDialog.cpp b/src/gui/fileDialog.cpp
+index 6238e625e..3afe1a396 100644
+--- a/src/gui/fileDialog.cpp
++++ b/src/gui/fileDialog.cpp
+@@ -6,10 +6,99 @@
+ #include <nfd.h>
+ #elif defined(ANDROID)
+ #include <SDL.h>
+-#elif (!defined(SUPPORT_XP) || !defined(_WIN32))
++#elif (!defined(__EMSCRIPTEN__) && (!defined(SUPPORT_XP) || !defined(_WIN32)))
+ #include "../../extern/pfd-fixed/portable-file-dialogs.h"
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#include <stdlib.h>
++
++// --- browser file bridge -------------------------------------------------
++// Open uses a hidden <input type=file>; the picked file is read into MEMFS at
++// /webopen/<name> and the C++ side polls furnaceWebPickState(). Save writes to
++// /websave/<name>; furnaceWebFlushDownloads() (called each frame) turns any file
++// there into a browser download. State lives on Module.__fur* to survive across
++// the async FileReader callback.
++
++// state: 0 = pending, 2 = ready, -1 = cancelled
++EM_JS(void, furnaceWebPickFile, (const char* acceptC), {
++  var accept = UTF8ToString(acceptC);
++  console.log('[FUR] pickFile accept=', accept);
++  Module.__furPickState = 0;
++  Module.__furPickPath = '';
++  try { FS.mkdir('/webopen'); } catch (e) {}
++  var input = document.createElement('input');
++  input.type = 'file';
++  if (accept) input.accept = accept;
++  input.style.display = 'none';
++  document.body.appendChild(input);
++  var picked = false;
++  function cleanup() {
++    if (input.parentNode) input.parentNode.removeChild(input);
++  }
++  input.addEventListener('change', function () {
++    console.log('[FUR] pickFile change, files=', input.files && input.files.length);
++    if (!input.files || !input.files.length) { Module.__furPickState = -1; cleanup(); return; }
++    picked = true;
++    var file = input.files[0];
++    var reader = new FileReader();
++    reader.onload = function () {
++      try {
++        FS.writeFile('/webopen/' + file.name, new Uint8Array(reader.result));
++        Module.__furPickPath = '/webopen/' + file.name;
++        Module.__furPickState = 2;
++        console.log('[FUR] pickFile wrote', Module.__furPickPath, reader.result.byteLength, 'bytes; state=2');
++      } catch (e) { console.error('[FUR] write failed', e); Module.__furPickState = -1; }
++      cleanup();
++    };
++    reader.onerror = function () { console.error('[FUR] FileReader error'); Module.__furPickState = -1; cleanup(); };
++    reader.readAsArrayBuffer(file);
++  });
++  // modern browsers fire 'cancel' when the picker is dismissed with no selection
++  input.addEventListener('cancel', function () {
++    console.log('[FUR] pickFile cancelled');
++    if (Module.__furPickState === 0) { Module.__furPickState = -1; cleanup(); }
++  });
++  input.click();
++});
++
++EM_JS(int, furnaceWebPickState, (), {
++  return Module.__furPickState | 0;
++});
++
++EM_JS(char*, furnaceWebPickPath, (), {
++  return stringToNewUTF8(Module.__furPickPath || '');
++});
++
++// download every file sitting in /websave, then remove it
++EM_JS(void, furnaceWebFlushDownloads, (), {
++  var dir = '/websave';
++  var list;
++  try { list = FS.readdir(dir); } catch (e) { return; }
++  list.forEach(function (name) {
++    if (name === '.' || name === '..') return;
++    var path = dir + '/' + name;
++    var data;
++    try { data = FS.readFile(path); } catch (e) { return; }
++    console.log('[FUR] downloading', name, data.length, 'bytes');
++    try {
++      var url = URL.createObjectURL(new Blob([data], { type: 'application/octet-stream' }));
++      var a = document.createElement('a');
++      a.href = url; a.download = name;
++      document.body.appendChild(a); a.click(); document.body.removeChild(a);
++      URL.revokeObjectURL(url);
++    } catch (e) { console.error('furnace: download failed', e); }
++    try { FS.unlink(path); } catch (e) {}
++  });
++});
++
++// called once per frame from the GUI loop to ship any pending save/export files
++void furnaceWebProcessDownloads() {
++  furnaceWebFlushDownloads();
++}
++#endif
++
+ #ifdef USE_NFD
+ struct NFDState {
+   unsigned char isSave;
+@@ -117,6 +206,29 @@ void FurnaceGUIFileDialog::convertFilterList(std::vector<String>& filter) {
+ bool FurnaceGUIFileDialog::openLoad(String header, std::vector<String> filter, String path, double dpiScale, FileDialogSelectCallback clickCallback, bool allowMultiple, String hint) {
+   if (opened) return false;
+   dialogType=0;
++#ifdef __EMSCRIPTEN__
++  // browser: pop the OS file picker; render() polls for the chosen file.
++  opened=true;
++  hasError=false;
++  webSaveMode=false;
++  webAccepted=false;
++  fileName.clear();
++  {
++    // turn the filter's "*.fur *.dmf" globs into an HTML accept list ".fur,.dmf"
++    String accept;
++    for (size_t i=1; i<filter.size(); i+=2) {
++      String cur;
++      for (char c: filter[i]) {
++        if (c=='*'||c==' ') { if (!cur.empty()) { if (!accept.empty()) accept+=','; accept+=cur; cur=""; } }
++        else cur+=c;
++      }
++      if (!cur.empty()) { if (!accept.empty()) accept+=','; accept+=cur; }
++    }
++    logI("[FUR] openLoad: opening browser picker, accept=%s",accept.c_str());
++    furnaceWebPickFile(accept.c_str());
++  }
++  return true;
++#endif
+   curPath=path;
+ 
+   // strip excess directory separators
+@@ -175,7 +287,7 @@ bool FurnaceGUIFileDialog::openLoad(String header, std::vector<String> filter, S
+     jniEnv->DeleteLocalRef(class_);
+     jniEnv->DeleteLocalRef(activity);
+     return true;
+-#elif (!defined(SUPPORT_XP) || !defined(_WIN32))
++#elif (!defined(__EMSCRIPTEN__) && (!defined(SUPPORT_XP) || !defined(_WIN32)))
+     dialogO=new pfd::open_file(header,path,filter,allowMultiple?(pfd::opt::multiselect):(pfd::opt::none));
+     hasError=!pfd::settings::available();
+ #else
+@@ -200,6 +312,25 @@ bool FurnaceGUIFileDialog::openLoad(String header, std::vector<String> filter, S
+ 
+ bool FurnaceGUIFileDialog::openSave(String header, std::vector<String> filter, String path, double dpiScale, String hint) {
+   if (opened) return false;
++#ifdef __EMSCRIPTEN__
++  // browser: no save picker. Write to /websave/<name>; the per-frame flush turns
++  // it into a download. render() reports "accepted" immediately with that path.
++  opened=true;
++  hasError=false;
++  webSaveMode=true;
++  webAccepted=true;
++  dialogType=1;
++  EM_ASM({ try { FS.mkdir('/websave'); } catch (e) {} });
++  {
++    String base=hint;
++    if (base.empty()) base="untitled";
++    curPath="/websave";
++    fileName.clear();
++    fileName.push_back(String("/websave/")+base);
++    logI("[FUR] openSave: will write %s",fileName[0].c_str());
++  }
++  return true;
++#endif
+ 
+ #ifdef ANDROID
+     if (!SDL_AndroidRequestPermission("android.permission.WRITE_EXTERNAL_STORAGE")) {
+@@ -265,7 +396,7 @@ bool FurnaceGUIFileDialog::openSave(String header, std::vector<String> filter, S
+     jniEnv->DeleteLocalRef(class_);
+     jniEnv->DeleteLocalRef(activity);
+     return true;
+-#elif (!defined(SUPPORT_XP) || !defined(_WIN32))
++#elif (!defined(__EMSCRIPTEN__) && (!defined(SUPPORT_XP) || !defined(_WIN32)))
+     dialogS=new pfd::save_file(header,path,filter);
+     hasError=!pfd::settings::available();
+ #else
+@@ -307,7 +438,7 @@ bool FurnaceGUIFileDialog::openSelectDir(String header, String path, double dpiS
+ #elif defined(ANDROID)
+     hasError=true;
+     return false;
+-#elif (!defined(SUPPORT_XP) || !defined(_WIN32))
++#elif (!defined(__EMSCRIPTEN__) && (!defined(SUPPORT_XP) || !defined(_WIN32)))
+     dialogF=new pfd::select_folder(header,path);
+     hasError=!pfd::settings::available();
+ #else
+@@ -331,6 +462,9 @@ bool FurnaceGUIFileDialog::openSelectDir(String header, String path, double dpiS
+ }
+ 
+ bool FurnaceGUIFileDialog::accepted() {
++#ifdef __EMSCRIPTEN__
++  return webAccepted && !fileName.empty();
++#endif
+   if (sysDialog) {
+     return (!fileName.empty());
+   } else {
+@@ -339,6 +473,11 @@ bool FurnaceGUIFileDialog::accepted() {
+ }
+ 
+ void FurnaceGUIFileDialog::close() {
++#ifdef __EMSCRIPTEN__
++  opened=false;
++  webSaveMode=false;
++  return;
++#endif
+   if (sysDialog) {
+     if (dialogType==2) {
+       if (dialogF!=NULL) {
+@@ -383,6 +522,38 @@ void FurnaceGUIFileDialog::close() {
+ }
+ 
+ bool FurnaceGUIFileDialog::render(const ImVec2& min, const ImVec2& max) {
++#ifdef __EMSCRIPTEN__
++  // render() is polled every frame regardless of whether a dialog is open, so
++  // bail out unless we actually have one pending (otherwise stale pick state
++  // would re-fire the consumer).
++  if (!opened) return false;
++  if (webSaveMode) {
++    // path already set by openSave(); the consumer writes it and the per-frame
++    // flush ships the download. Report done immediately.
++    logI("[FUR] render: save mode, path=%s",fileName.empty()?"<none>":fileName[0].c_str());
++    return true;
++  }
++  int st=furnaceWebPickState();
++  if (st==2) {
++    char* p=furnaceWebPickPath();
++    logI("[FUR] render: file ready, path=%s",p);
++    fileName.clear();
++    fileName.push_back(String(p));
++    free(p);
++    if (!fileName[0].empty()) {
++      size_t dsPos=fileName[0].rfind(DIR_SEPARATOR);
++      if (dsPos!=String::npos) curPath=fileName[0].substr(0,dsPos);
++    }
++    webAccepted=true;
++    return true;
++  } else if (st==-1) {
++    // cancelled
++    webAccepted=false;
++    fileName.clear();
++    return true;
++  }
++  return false;
++#endif
+   if (sysDialog) {
+ #ifdef USE_NFD
+     if (dialogOK) {
+@@ -402,7 +573,7 @@ bool FurnaceGUIFileDialog::render(const ImVec2& min, const ImVec2& max) {
+ #elif defined(ANDROID)
+     // TODO: detect when file picker is closed
+     return false;
+-#elif (!defined(SUPPORT_XP) || !defined(_WIN32))
++#elif (!defined(__EMSCRIPTEN__) && (!defined(SUPPORT_XP) || !defined(_WIN32)))
+     if (dialogType==2) {
+       if (dialogF!=NULL) {
+         if (dialogF->ready(0)) {
+@@ -482,6 +653,12 @@ String FurnaceGUIFileDialog::getPath() {
+ }
+ 
+ std::vector<String>& FurnaceGUIFileDialog::getFileName() {
++#ifdef __EMSCRIPTEN__
++  // the browser dialog manages fileName directly (openLoad/openSave/render set
++  // it). Do NOT delegate to newFilePicker, which would clear it and hand back an
++  // empty selection - breaking open (load("")) and save/export (skipped write).
++  return fileName;
++#endif
+   if (sysDialog) {
+     return fileName;
+   } else {
+diff --git a/src/gui/fileDialog.h b/src/gui/fileDialog.h
+index 8b6f3743b..592b3727e 100644
+--- a/src/gui/fileDialog.h
++++ b/src/gui/fileDialog.h
+@@ -36,6 +36,9 @@ class FurnaceGUIFileDialog {
+   bool opened;
+   unsigned char dialogType;
+   bool hasError;
++  // web build: track browser file-picker / download-save state
++  bool webAccepted;
++  bool webSaveMode;
+   char noSysFilter[4096];
+   String curPath;
+   FurnaceFilePicker* newFilePicker;
+@@ -51,7 +54,7 @@ class FurnaceGUIFileDialog {
+   void* dialogO;
+   void* dialogS;
+   void* dialogF;
+-#elif (!defined(SUPPORT_XP) || !defined(_WIN32))
++#elif (!defined(__EMSCRIPTEN__) && (!defined(SUPPORT_XP) || !defined(_WIN32)))
+   pfd::open_file* dialogO;
+   pfd::save_file* dialogS;
+   pfd::select_folder* dialogF;
+@@ -79,6 +82,8 @@ class FurnaceGUIFileDialog {
+       opened(false),
+       dialogType(0),
+       hasError(false),
++      webAccepted(false),
++      webSaveMode(false),
+       newFilePicker(builtInPicker),
+ #ifdef ANDROID
+       jniEnv(NULL),
+diff --git a/src/gui/gui.cpp b/src/gui/gui.cpp
+index 548c7b371..245df339b 100644
+--- a/src/gui/gui.cpp
++++ b/src/gui/gui.cpp
+@@ -27,6 +27,9 @@
+ #include "util.h"
+ #include "../ta-log.h"
+ #include "../fileutils.h"
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
+ #include "imgui.h"
+ #include "imgui_internal.h"
+ #include "IconsFontAwesome4.h"
+@@ -2793,6 +2796,9 @@ int FurnaceGUI::save(String path, int dmfVersion) {
+   }
+   logV("opening file for writing...");
+   FILE* outFile=ps_fopen(path.c_str(),"wb");
++#ifdef __EMSCRIPTEN__
++  logI("[FUR] save: ps_fopen(%s) -> %s",path.c_str(),outFile?"OK":strerror(errno));
++#endif
+   if (outFile==NULL) {
+     lastError=strerror(errno);
+     logE("couldn't save! %s",lastError);
+@@ -3004,6 +3010,34 @@ void FurnaceGUI::openRecentFile(String path) {
+ void FurnaceGUI::pushRecentFile(String path) {
+   if (path.empty()) return;
+   if (path.find(backupPath)==0) return;
++#ifdef __EMSCRIPTEN__
++  // On the web there are no persistent filesystem paths: the opened/saved file
++  // lives in a transient MEMFS dir (/webopen or /websave). Copy it into the
++  // IDBFS-backed config dir so "open recent" can reload it after a page refresh,
++  // and record THAT path.
++  {
++    String recentDir=e->getConfigPath()+"recent";
++    makeDir(recentDir.c_str());
++    size_t sp=path.rfind('/');
++    String base=(sp==String::npos)?path:path.substr(sp+1);
++    String dst=recentDir+"/"+base;
++    if (path!=dst) {
++      FILE* in=ps_fopen(path.c_str(),"rb");
++      if (in!=NULL) {
++        FILE* out=ps_fopen(dst.c_str(),"wb");
++        if (out!=NULL) {
++          unsigned char buf[16384];
++          size_t n;
++          while ((n=fread(buf,1,sizeof(buf),in))>0) fwrite(buf,1,n,out);
++          fclose(out);
++        }
++        fclose(in);
++      }
++    }
++    path=dst;
++    emscripten_run_script("if (typeof FS!=='undefined') FS.syncfs(false,function(e){});");
++  }
++#endif
+   for (int i=0; i<(int)recentFile.size(); i++) {
+     if (recentFile[i]==path) {
+       recentFile.erase(i);
+@@ -4553,6 +4587,12 @@ bool FurnaceGUI::detectOutOfBoundsWindow(SDL_Rect& failing) {
+   return false;
+ }
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++// defined in fileDialog.cpp: ships any pending save/export files as downloads
++void furnaceWebProcessDownloads();
++#endif
++
+ #define DECLARE_METRIC(_n) \
+   uint64_t __perfM##_n;
+ 
+@@ -4573,7 +4613,7 @@ bool FurnaceGUI::detectOutOfBoundsWindow(SDL_Rect& failing) {
+   if (x) pendingLayoutImportReopen.push(&x); \
+   x=false;
+ 
+-bool FurnaceGUI::loop() {
++void FurnaceGUI::loopFrame() {
+   DECLARE_METRIC(calcChanOsc)
+   DECLARE_METRIC(mobileControls)
+   DECLARE_METRIC(mobileOrderSel)
+@@ -4624,24 +4664,11 @@ bool FurnaceGUI::loop() {
+   DECLARE_METRIC(backupsManager)
+   DECLARE_METRIC(popup)
+ 
+-#ifdef IS_MOBILE
+-  bool doThreadedInput=true;
+-#else
+-  bool doThreadedInput=!settings.noThreadedInput;
++  {
++#ifdef __EMSCRIPTEN__
++    // ship any files written to /websave (saves/exports) as browser downloads
++    furnaceWebProcessDownloads();
+ #endif
+-  if (doThreadedInput) {
+-    logD("key input: event filter");
+-    SDL_SetEventFilter(_processEvent,this);
+-  } else {
+-    logD("key input: main thread");
+-  }
+-
+-  if (safeMode) {
+-    showError(_("Furnace has been started in Safe Mode.\nthis means that:\n\n- software rendering is being used\n- audio output may not work\n- font loading is disabled\n\ncheck any settings which may have made Furnace start up in this mode.\nfont loading is one of these."));
+-    settingsOpen=true;
+-  }
+-
+-  while (!quit) {
+     SDL_Event ev;
+     SelectionPoint prevCursor=cursor;
+     if (e->isPlaying()) {
+@@ -4649,7 +4676,9 @@ bool FurnaceGUI::loop() {
+     }
+     if (--drawHalt<=0) {
+       drawHalt=0;
++#ifndef __EMSCRIPTEN__
+       if (settings.powerSave) SDL_WaitEventTimeout(NULL,500);
++#endif
+     }
+ 
+     memcpy(perfMetricsLast,perfMetrics,64*sizeof(FurnaceGUIPerfMetric));
+@@ -4884,7 +4913,8 @@ bool FurnaceGUI::loop() {
+           break;
+         case SDL_QUIT:
+           if (requestQuit()) {
+-            return true;
++            quit=true;
++            return;
+           }
+           break;
+         case SDL_APP_TERMINATING:
+@@ -5120,9 +5150,11 @@ bool FurnaceGUI::loop() {
+     eventTimeEnd=SDL_GetPerformanceCounter();
+ 
+     if (SDL_GetWindowFlags(sdlWin)&SDL_WINDOW_MINIMIZED) {
++#ifndef __EMSCRIPTEN__
+       SDL_Delay(30);
++#endif
+       drawHalt=0;
+-      continue;
++      return;
+     }
+ 
+ #ifndef NO_INTRO
+@@ -5212,7 +5244,7 @@ bool FurnaceGUI::loop() {
+       if (initAttempts>5) {
+         reportError(_("can't keep going without graphics! Furnace will quit now."));
+         quit=true;
+-        break;
++        return;
+       }
+ 
+       rend->clear(ImVec4(0.0,0.0,0.0,1.0));
+@@ -5230,7 +5262,7 @@ bool FurnaceGUI::loop() {
+       mustClear=2;
+       initialScreenWipe=1.0f;
+ 
+-      continue;
++      return;
+     }
+ 
+     bool fontsFailed=false;
+@@ -8270,13 +8302,64 @@ bool FurnaceGUI::loop() {
+       latchNibble=false;
+     }
+ 
++#ifndef __EMSCRIPTEN__
+     if (SDL_GetWindowFlags(sdlWin)&SDL_WINDOW_MINIMIZED) {
+       SDL_Delay(100);
+     }
++#endif
++  }
++
++#ifdef __EMSCRIPTEN__
++  if (quit) emscripten_cancel_main_loop();
++#endif
++}
++
++#ifdef __EMSCRIPTEN__
++static void _emLoopThunk(void* u) {
++  // A C++ exception escaping the frame callback unwinds out of the browser's
++  // main-loop runner and permanently kills it: the display freezes while the
++  // audio ScriptProcessorNode (a separate callback) keeps playing. Contain it
++  // per-frame so one bad frame becomes a logged hiccup instead of a dead UI,
++  // and so we can see what actually threw.
++  try {
++    ((FurnaceGUI*)u)->loopFrame();
++  } catch (std::exception& e) {
++    logE("[FUR] exception in loopFrame: %s",e.what());
++  } catch (...) {
++    logE("[FUR] non-standard exception in loopFrame");
++  }
++}
++#endif
++
++bool FurnaceGUI::loop() {
++#ifdef IS_MOBILE
++  doThreadedInput=true;
++#else
++  doThreadedInput=!settings.noThreadedInput;
++#endif
++  if (doThreadedInput) {
++    logD("key input: event filter");
++    SDL_SetEventFilter(_processEvent,this);
++  } else {
++    logD("key input: main thread");
+   }
+ 
++  if (safeMode) {
++    showError(_("Furnace has been started in Safe Mode.\nthis means that:\n\n- software rendering is being used\n- audio output may not work\n- font loading is disabled\n\ncheck any settings which may have made Furnace start up in this mode.\nfont loading is one of these."));
++    settingsOpen=true;
++  }
++
++#ifdef __EMSCRIPTEN__
++  // the browser owns the frame clock: hand control to the event loop and let it
++  // call loopFrame() ~60x/s. simulate_infinite_loop=1 unwinds this stack, so no
++  // per-frame state may live here (see loopFrame / doThreadedInput member).
++  emscripten_set_main_loop_arg(_emLoopThunk,this,0,1);
++  return false; // not reached
++#else
++  while (!quit) loopFrame();
+   logD("GUI loop is over");
+   return false;
++#endif
+ }
+ 
+ bool FurnaceGUI::init() {
+diff --git a/src/gui/gui.h b/src/gui/gui.h
+index e4123162a..ddaccfe81 100644
+--- a/src/gui/gui.h
++++ b/src/gui/gui.h
+@@ -149,6 +149,10 @@ enum FurnaceGUIRenderBackend {
+ 
+ #ifdef HAVE_MOMO
+ #define ngettext momo_ngettext
++#elif !defined(HAVE_LOCALE)
++// no locale backend (e.g. the Emscripten build): English passthrough, matching
++// gettext's ngettext(singular, plural, n) semantics.
++#define ngettext(_s,_p,_n) (((_n)==1)?(_s):(_p))
+ #endif
+ 
+ #define GUI_EDIT_OCTAVE_MIN -5
+@@ -3448,6 +3452,11 @@ class FurnaceGUI {
+     bool detectOutOfBoundsWindow(SDL_Rect& failing);
+     int processEvent(SDL_Event* ev);
+     bool loop();
++    // one iteration of the main loop body. Split out from loop() so it can be
++    // driven per-frame by emscripten_set_main_loop in the browser build (where
++    // a blocking while(!quit) would freeze the tab).
++    void loopFrame();
++    bool doThreadedInput;
+     bool finish(bool saveConfig=false);
+     bool init();
+     bool requestQuit();
+diff --git a/src/gui/settings.cpp b/src/gui/settings.cpp
+index 4978e714f..67c3d0e37 100644
+--- a/src/gui/settings.cpp
++++ b/src/gui/settings.cpp
+@@ -1343,7 +1343,9 @@ void FurnaceGUI::applyUISettings(bool updateFonts) {
+ 
+   if (updateFonts) {
+     if (fileDialog!=NULL) delete fileDialog;
+-#ifdef FLATPAK_WORKAROUNDS
++#if defined(FLATPAK_WORKAROUNDS) || defined(__EMSCRIPTEN__)
++    // the browser has no native file dialog; always use the built-in ImGui file
++    // picker, which browses the (virtual) Emscripten filesystem.
+     fileDialog=new FurnaceGUIFileDialog(false,newFilePicker);
+ #else
+     fileDialog=new FurnaceGUIFileDialog(settings.sysFileDialog,newFilePicker);
+diff --git a/src/gui/tutorial.cpp b/src/gui/tutorial.cpp
+index 0b86fd213..4ae6f1a62 100644
+--- a/src/gui/tutorial.cpp
++++ b/src/gui/tutorial.cpp
+@@ -891,6 +891,9 @@ void FurnaceGUI::drawTutorial() {
+     if (ImGui::Button(_("OK"))) {
+       tutorial.protoWelcome=true;
+       commitTutorial();
++      // persist immediately so the welcome screen doesn't reappear on reload
++      // (on the web build this also flushes the config dir to IndexedDB).
++      e->saveConf();
+       ImGui::CloseCurrentPopup();
+     }
+ 
+diff --git a/src/log.cpp b/src/log.cpp
+index 8b91813c2..235c09944 100644
+--- a/src/log.cpp
++++ b/src/log.cpp
+@@ -208,6 +208,13 @@ void _logFileThread() {
+ bool startLogFile(const char* path) {
+   if (logFileAvail) return true;
+ 
++#ifdef __EMSCRIPTEN__
++  // The single-threaded WebAssembly build cannot spawn the background log-writer
++  // thread. Skip the on-disk log entirely; log output still reaches the browser
++  // console via stderr.
++  return false;
++#endif
++
+   // rotate log file if possible
+   char oldPath[4096];
+   char newPath[4096];

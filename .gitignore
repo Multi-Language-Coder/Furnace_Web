@@ -1,0 +1,5 @@
+# dist/ (the compiled .js + .wasm) is intentionally committed — jsDelivr serves it.
+.DS_Store
+Thumbs.db
+*.log
+node_modules/

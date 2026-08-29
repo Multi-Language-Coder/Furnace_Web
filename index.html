@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Furnace Web</title>
+<style>
+  :root { --bg:#1b1a26; --panel:#262436; --accent:#ffa53d; --text:#e8e6f0; --muted:#9a97ad; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; padding:24px; }
+  .wrap { width:100%; max-width:640px; }
+  h1 { margin:0 0 6px; font-size:28px; } h1 .flame { color:var(--accent); }
+  p.sub { color:var(--muted); margin:0 0 26px; }
+  .cards { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:520px){ .cards { grid-template-columns:1fr; } }
+  a.card { display:block; text-decoration:none; color:var(--text); background:var(--panel);
+    border:1px solid #322f45; border-radius:14px; padding:22px; transition:border-color .15s, transform .1s; }
+  a.card:hover { border-color:var(--accent); transform:translateY(-2px); }
+  a.card h2 { margin:0 0 6px; font-size:19px; }
+  a.card p { margin:0; color:var(--muted); font-size:13px; line-height:1.5; }
+  .foot { color:var(--muted); font-size:12px; margin-top:26px; line-height:1.6; }
+  .foot a { color:var(--accent); text-decoration:none; }
+  code { background:#00000030; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1><span class="flame">&#9832;</span> Furnace Web</h1>
+    <p class="sub">The Furnace chiptune tracker, compiled to WebAssembly and served from the jsDelivr CDN. Nothing to install.</p>
+    <div class="cards">
+      <a class="card" href="app.html">
+        <h2>Full tracker &rarr;</h2>
+        <p>The complete Furnace application (Dear ImGui UI, ~50 chip emulators). Open/save <code>.fur</code>, import samples, export VGM. Streams ~15&nbsp;MB on first load.</p>
+      </a>
+      <a class="card" href="player.html">
+        <h2>Module player &rarr;</h2>
+        <p>Lightweight <code>.fur</code>/<code>.dmf</code> player with a per-channel VU + scope visualizer. Streams ~4&nbsp;MB on first load.</p>
+      </a>
+    </div>
+    <div class="foot">
+      Built on <a href="https://github.com/tildearrow/furnace" target="_blank" rel="noopener">tildearrow/furnace</a> (GPL-2.0). See <a href="README.md">README</a> for the web-port patch and build notes. Engine assets served via
+      <a href="https://www.jsdelivr.com/" target="_blank" rel="noopener">jsDelivr</a> from <code>dist/</code>.
+    </div>
+  </div>
+</body>
+</html>
